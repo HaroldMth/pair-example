@@ -1,0 +1,28 @@
+{
+  "presets": [
+    [
+      "@babel/preset-env",
+      {
+        "targets": { "node": "current" },
+        "modules": "commonjs"
+      }
+    ]
+  ],
+  "ignore": [
+    "**/node_modules/**"
+  ],
+  "overrides": [
+    {
+      "include": ["node_modules/baileys"],
+      "presets": [
+        [
+          "@babel/preset-env",
+          {
+            "targets": { "node": "current" },
+            "modules": "commonjs"
+          }
+        ]
+      ]
+    }
+  ]
+}

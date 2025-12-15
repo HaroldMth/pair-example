@@ -1,0 +1,72 @@
+<!DOCKTYPE HTML>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="description" content="whatsapp bot pairing code." />
+        <meta name="keywords" content="pair, whatsapp-bot" />
+        <meta name="author" content="IRON-M4N" />
+        <link
+            rel="icon"
+            href="https://cdn.ironman.my.id/u/uugBEhB.jpeg"
+            type="image/jpeg"
+        />
+        <link rel="stylesheet" href="style.css" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Phone Pairing</title>
+    </head>
+    <body>
+        <div class="card">
+            <h2 style="color: white">Enter Phone Number</h2>
+            <input
+                type="text"
+                id="phone"
+                placeholder="Enter your phone number"
+            />
+            <a onclick="submit()">Submit</a>
+            <div id="output"></div>
+        </div>
+
+        <script>
+            function cut(input) {
+                return input.replace(/\D/g, "");
+            }
+            async function submit() {
+                var inp = document.getElementById("phone").value;
+                var trim = cut(inp);
+
+                try {
+                    var res = await fetch(`/pair?code=${trim}`);
+                    var data = await res.json();
+
+                    if (res.ok) {
+                        document.getElementById("output").innerHTML = `
+                        <p>Code: ${data.code}</p>
+                        <button class="copy-btn" onclick="copyToClipboard('${data.code}')">Copy to Clipboard</button>
+                        <p id="copy-confirm" class="copy-confirm" style="display: none;">Copied!</p>
+                    `;
+                    } else {
+                        document.getElementById(
+                            "output"
+                        ).innerHTML = `<p>Error: fekd up</p>`;
+                    }
+                } catch (error) {
+                    document.getElementById(
+                        "output"
+                    ).innerHTML = `<p>Error: ${error}</p>`;
+                }
+            }
+
+            function copyToClipboard(text) {
+                navigator.clipboard
+                    .writeText(text)
+                    .then(() => {
+                        document.getElementById("copy-confirm").style.display =
+                            "block";
+                    })
+                    .catch(err => {
+                        alert(err);
+                    });
+            }
+        </script>
+    </body>
+</html>

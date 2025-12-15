@@ -1,0 +1,34 @@
+{
+  "name": "pair",
+  "version": "1.0.0",
+  "description": "simple pairing code example",
+  "main": "index.js",
+  "scripts": {
+    "start": "pm2 start index.js --name pair-example --node-args \"-r @babel/register\"",
+    "stop": "pm2 stop pair-example",
+    "restart": "pm2 restart pair-example",
+    "dev": "node -r @babel/register index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/IRON-M4N/pair-example.git"
+  },
+  "keywords": [],
+  "author": "IRON-M4N",
+  "license": "MIT",
+  "dependencies": {
+    "async-mutex": "^0.5.0",
+    "baileys": "git+https://github.com/WhiskeySockets/Baileys.git",
+    "express": "^4.21.1",
+    "megajs": "*",
+    "node-cache": "^5.1.2",
+    "pino": "^9.4.0",
+    "pm2": "^5.4.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.28.0",
+    "@babel/preset-env": "^7.28.0",
+    "@babel/register": "^7.27.1"
+  }
+}
