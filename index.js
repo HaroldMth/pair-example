@@ -1,4 +1,8 @@
-// server.js
+// server_pairing_hold.js
+// Drop-in replacement for your Baileys connector that holds pairing sockets a bit
+// longer for ephemeral hosts (Render) and uses a temporary session folder while
+// pairing. If pairing succeeds, session is moved to a persistent folder.
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -24,76 +28,85 @@ const PORT = process.env.PORT || 3000;
 const mutex = new Mutex();
 const msgRetryCounterCache = new NodeCache();
 
-// Map to track reconnect attempts per number to avoid tight loops
-const reconnectAttempts = new Map();
-const MAX_RECONNECTS = 3;
-const RECONNECT_BACKOFF_MS = 3000;
+// Configurable env vars
+const SESSION_BASE_DIR = process.env.SESSION_BASE_DIR || path.join(__dirname, 'session');
+const PERSISTENT_BASE_DIR = process.env.PERSISTENT_BASE_DIR || path.join(__dirname, 'session_persist');
+const PAIR_HOLD_MS = parseInt(process.env.PAIR_HOLD_MS || '45000', 10); // how long to hold socket after pairing code
+const CLEANUP_DELAY_MS = parseInt(process.env.CLEANUP_DELAY_MS || '15000', 10); // grace period before deleting after 401
+const MAX_RECONNECTS = parseInt(process.env.MAX_RECONNECTS || '3', 10);
+const RECONNECT_BACKOFF_MS = parseInt(process.env.RECONNECT_BACKOFF_MS || '3000', 10);
 
 app.use(express.static(path.join(__dirname, 'static')));
 
 let ACTIVE_SOCKET = null;
+const reconnectAttempts = new Map();
 
-/**
- * Create or get session directory for a number
- */
-function getSessionDir(num) {
-  return path.join(__dirname, 'session', num);
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
-/**
- * Remove session dir safely
- */
-function removeSessionDir(sessionDir) {
+function removeDir(dir) {
   try {
-    if (fs.existsSync(sessionDir)) {
-      fs.rmSync(sessionDir, { recursive: true, force: true });
-      console.log('[FS] Removed session dir:', sessionDir);
-    }
+    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+    console.log('[FS] Removed dir:', dir);
   } catch (e) {
-    console.warn('[FS] Failed to remove session dir:', sessionDir, e);
+    console.warn('[FS] Failed to remove dir:', dir, e?.message || e);
   }
 }
 
-/**
- * Main connector function
- * @param {string} NUMBER raw phone (with country code)
- * @param {express.Response|null} res optional http response for pairing endpoint
- */
+function moveDir(src, dest) {
+  try {
+    ensureDir(path.dirname(dest));
+    // use fs.rename first (fast), fallback to cp + rm if cross-device
+    try {
+      fs.renameSync(src, dest);
+    } catch (err) {
+      // fallback copy
+      fs.cpSync(src, dest, { recursive: true });
+      removeDir(src);
+    }
+    console.log('[FS] Moved session from', src, '->', dest);
+  } catch (e) {
+    console.warn('[FS] Failed to move session dir:', e.message || e);
+  }
+}
+
 async function connector(NUMBER, res = null) {
   console.log('\n================ CONNECTOR START =================');
 
-  const num = NUMBER.replace(/[^0-9]/g, '');
+  const num = String(NUMBER).replace(/[^0-9]/g, '');
   const jid = num + '@s.whatsapp.net';
 
   console.log('[INFO] Raw number:', NUMBER);
   console.log('[INFO] Sanitized number:', num);
   console.log('[INFO] Target JID:', jid);
 
-  const sessionDir = getSessionDir(num);
-  if (!fs.existsSync(sessionDir)) {
-    fs.mkdirSync(sessionDir, { recursive: true });
-    console.log('[FS] Created session dir:', sessionDir);
-  }
+  // create a temporary session folder for pairing attempts to avoid race with ephemeral hosts
+  ensureDir(SESSION_BASE_DIR);
+  const tempDir = path.join(SESSION_BASE_DIR, `${num}-${Date.now()}`);
+  ensureDir(tempDir);
+  console.log('[FS] Using temporary session dir for pairing:', tempDir);
 
   // limit reconnect loops
   const attempts = reconnectAttempts.get(num) || 0;
   if (attempts >= MAX_RECONNECTS) {
-    console.log(`[STOP] Max reconnect attempts reached for ${num} (${attempts}). Remove session or wait before retrying.`);
+    console.log(`[STOP] Max reconnect attempts reached for ${num} (${attempts}).`);
     if (res && !res.headersSent) res.status(429).json({ error: 'too_many_reconnects' });
     return;
   }
 
   console.log('[AUTH] Loading auth state...');
-  const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+  const { state, saveCreds } = await useMultiFileAuthState(tempDir);
+
+  // flag that will be set when registration completes
+  let registered = Boolean(state.creds?.registered || state.creds?.me?.id);
+  let cleanupTimer = null;
 
   console.log('[SOCKET] Creating WhatsApp socket...');
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(
-        state.keys,
-        pino({ level: 'fatal' })
-      )
+      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'fatal' }))
     },
     logger: pino({ level: 'fatal' }),
     browser: Browsers.macOS('Safari'),
@@ -103,23 +116,33 @@ async function connector(NUMBER, res = null) {
 
   ACTIVE_SOCKET = sock;
 
-  // Ensure we persist creds when Baileys tells us
   sock.ev.on('creds.update', async () => {
     try {
       await saveCreds();
-      console.log('[AUTH] Credentials saved');
+      // re-read registration flag
+      registered = Boolean(state.creds?.registered || state.creds?.me?.id);
+      console.log('[AUTH] Credentials saved. registered=', registered);
+
+      // If registered and we are using a persistent base, move the temp dir to persistent storage
+      if (registered && PERSISTENT_BASE_DIR) {
+        try {
+          ensureDir(PERSISTENT_BASE_DIR);
+          const dest = path.join(PERSISTENT_BASE_DIR, num);
+          moveDir(tempDir, dest);
+        } catch (err) {
+          console.warn('[AUTH] Failed moving session to persistent dir:', err?.message || err);
+        }
+      }
     } catch (err) {
-      console.warn('[AUTH] Failed to save creds:', err);
+      console.warn('[AUTH] Failed to save creds:', err?.message || err);
     }
   });
 
-  // Helpful debugging for incoming messages
   sock.ev.on('messages.upsert', (m) => {
     console.log('\n[EVENT] messages.upsert');
     console.log(JSON.stringify(m, null, 2));
   });
 
-  // Handle connection lifecycle
   sock.ev.on('connection.update', async (update) => {
     console.log('\n[EVENT] connection.update');
     console.log(update);
@@ -128,66 +151,7 @@ async function connector(NUMBER, res = null) {
 
     if (connection === 'open') {
       console.log('\n✅ CONNECTION OPEN');
-      // reset reconnect attempts on successful open
       reconnectAttempts.set(num, 0);
-
-      // wait a bit for WA to sync
-      await delay(5000);
-
-      // If device isn't registered, don't try to send session message
-      if (!state.creds.registered || !state.creds.me?.id) {
-        console.log('[AUTH] Device not fully registered yet. Finish pairing on phone first.');
-        if (res && !res.headersSent) {
-          res.json({ message: 'paired_but_not_registered' });
-        }
-        return;
-      }
-
-      try {
-        // 1) send initial text
-        console.log('\n📤 SENDING TEXT MESSAGE...');
-        const textMsg = await sock.sendMessage(jid, { text: config.MESSAGE });
-        console.log('✅ TEXT SENT');
-        console.log(JSON.stringify(textMsg, null, 2));
-
-        await delay(1500);
-
-        // 2) upload creds.json
-        const credsPath = path.join(sessionDir, 'creds.json');
-        if (!fs.existsSync(credsPath)) {
-          console.log('❌ creds.json NOT FOUND - skipping upload');
-          return;
-        }
-
-        console.log('📤 UPLOADING creds.json...');
-        const url = await upload(credsPath);
-        console.log('✅ UPLOAD URL:', url);
-
-        let sessionID = 'UPLOAD_FAILED';
-        if (typeof url === 'string' && url.includes('https://mega.nz/file/')) {
-          sessionID = config.PREFIX + url.split('https://mega.nz/file/')[1];
-        }
-
-        console.log('🆔 SESSION ID:', sessionID);
-
-        await delay(1500);
-
-        // 3) send session message
-        console.log('\n📤 SENDING SESSION MESSAGE...');
-        const sessionMsg = await sock.sendMessage(
-          jid,
-          {
-            image: { url: config.IMAGE },
-            caption: `*Session ID*\n\n${sessionID}`
-          },
-          { quoted: textMsg }
-        );
-
-        console.log('✅ SESSION MESSAGE SENT');
-        console.log(JSON.stringify(sessionMsg, null, 2));
-      } catch (err) {
-        console.error('\n❌ ERROR WHILE SENDING:', err);
-      }
     }
 
     if (connection === 'close') {
@@ -195,27 +159,32 @@ async function connector(NUMBER, res = null) {
       console.log('\n❌ CONNECTION CLOSED');
       console.log('REASON CODE:', reasonCode);
 
-      // WhatsApp 401 Unauthorized — credentials invalid / must re-pair
+      // 401 — unauthorized. Instead of immediate deletion, respect a short grace period
       if (reasonCode === 401) {
-        console.log('[AUTH] 401 Unauthorized: credentials invalid or expired.');
-        // remove session to force fresh pairing on next attempt
-        removeSessionDir(sessionDir);
-        // increment reconnect attempts so we don't loop forever
-        reconnectAttempts.set(num, (reconnectAttempts.get(num) || 0) + 1);
+        console.log('[AUTH] 401 Unauthorized detected. Will wait a short grace period before cleaning temp session.');
 
-        console.log('[STOP] Not reconnecting automatically after 401. Start pair flow again.');
-        if (res && !res.headersSent) res.status(401).json({ error: 'unauthorized', reason: 'invalid_credentials' });
-        return;
+        // if registration already happened, nothing to do
+        if (registered) {
+          console.log('[AUTH] Already registered. No cleanup necessary.');
+          return;
+        }
+
+        // schedule cleanup after CLEANUP_DELAY_MS unless registered becomes true
+        if (cleanupTimer) clearTimeout(cleanupTimer);
+        cleanupTimer = setTimeout(() => {
+          if (!registered) {
+            console.log('[CLEANUP] 401 grace expired — removing temporary session dir:', tempDir);
+            removeDir(tempDir);
+          } else {
+            console.log('[CLEANUP] Registered during grace window — keeping session.');
+          }
+        }, CLEANUP_DELAY_MS);
+
+        return; // do not attempt immediate reconnect
       }
 
       // For recoverable disconnects, attempt reconnect with backoff, limited retries
-      if (
-        [
-          DisconnectReason.connectionClosed,
-          DisconnectReason.connectionLost,
-          DisconnectReason.restartRequired
-        ].includes(reasonCode)
-      ) {
+      if ([DisconnectReason.connectionClosed, DisconnectReason.connectionLost, DisconnectReason.restartRequired].includes(reasonCode)) {
         const newAttempts = (reconnectAttempts.get(num) || 0) + 1;
         reconnectAttempts.set(num, newAttempts);
 
@@ -231,36 +200,63 @@ async function connector(NUMBER, res = null) {
     }
   });
 
-  // If not registered, expose pairing code immediately and return
+  // If not registered, request pairing code and hold socket open for PAIR_HOLD_MS
   try {
-    if (!state.creds.registered || !state.creds.me?.id) {
+    if (!registered) {
       console.log('\n🔑 REQUESTING PAIRING CODE...');
-      // small delay to ensure socket ready to handle request
-      await delay(500);
+      await delay(200); // small delay to let socket fully settle
 
-      // requestPairingCode may throw if not supported for some setups — wrap it
       try {
-        const code = await sock.requestPairingCode(num);
-        const pretty = String(code).match(/.{1,4}/g).join('-');
+        const rawCode = await sock.requestPairingCode(num);
+        const pretty = String(rawCode).match(/.{1,4}/g).join('-');
         console.log('📱 PAIRING CODE:', pretty);
-        if (res && !res.headersSent) {
-          res.json({ code: pretty });
+        console.log(`[PAIR] Holding socket for ${PAIR_HOLD_MS}ms to allow scanning.`);
+
+        if (res && !res.headersSent) res.json({ code: pretty });
+
+        // wait until either registered becomes true or timeout
+        const start = Date.now();
+        while (Date.now() - start < PAIR_HOLD_MS && !registered) {
+          await delay(500);
         }
-        // Return early: waiting for user to pair on phone (creds.update will fire then).
-        console.log('[PAIR] Sent pairing code to caller. Finish pairing on the phone to register.');
-        return;
+
+        if (registered) {
+          console.log('[PAIR] Device registered successfully during hold window.');
+          // If we moved the temp session in creds.update, nothing else to do
+          // Optionally upload creds now
+          try {
+            const credsPath = path.join(PERSISTENT_BASE_DIR || tempDir, num, 'creds.json');
+            // fallback to temp location if persistent not used
+            const finalCredsPath = fs.existsSync(credsPath) ? credsPath : path.join(tempDir, 'creds.json');
+
+            if (fs.existsSync(finalCredsPath)) {
+              console.log('📤 UPLOADING creds.json...');
+              const url = await upload(finalCredsPath);
+              console.log('✅ UPLOAD URL:', url);
+            }
+          } catch (err) {
+            console.warn('[UPLOAD] Failed to upload creds:', err?.message || err);
+          }
+
+        } else {
+          console.log('[PAIR] Hold window expired and device not registered. Scheduling cleanup.');
+          // schedule removal now (short delay) to give any last-second attempts a chance
+          setTimeout(() => {
+            if (!registered) removeDir(tempDir);
+          }, 1000);
+        }
+
+        return; // stop here as pairing flow handled
       } catch (err) {
-        console.warn('[PAIR] requestPairingCode failed:', err);
-        // do not crash — continue and let connection.update handle open/close
+        console.warn('[PAIR] requestPairingCode failed:', err?.message || err);
+        if (res && !res.headersSent) res.status(500).json({ error: 'pairing_failed', message: String(err?.message || err) });
       }
     } else {
       console.log('[INFO] Device already registered.');
-      if (res && !res.headersSent) {
-        res.json({ message: 'already_registered' });
-      }
+      if (res && !res.headersSent) res.json({ message: 'already_registered' });
     }
   } catch (err) {
-    console.error('[CONNECTOR] Unexpected error during pairing flow:', err);
+    console.error('[CONNECTOR] Unexpected error during pairing flow:', err?.message || err);
     if (res && !res.headersSent) res.status(500).json({ error: 'pairing_failed' });
   }
 
@@ -271,9 +267,7 @@ async function connector(NUMBER, res = null) {
 
 app.get('/pair', async (req, res) => {
   const number = req.query.code;
-  if (!number) {
-    return res.status(400).json({ error: 'Phone number required' });
-  }
+  if (!number) return res.status(400).json({ error: 'Phone number required' });
 
   const release = await mutex.acquire();
   try {
@@ -287,10 +281,7 @@ app.get('/pair', async (req, res) => {
 });
 
 app.get('/status', (req, res) => {
-  res.json({
-    active_socket: !!ACTIVE_SOCKET,
-    reconnect_attempts: Object.fromEntries(reconnectAttempts)
-  });
+  res.json({ active_socket: !!ACTIVE_SOCKET, reconnect_attempts: Object.fromEntries(reconnectAttempts) });
 });
 
 app.listen(PORT, () => {
