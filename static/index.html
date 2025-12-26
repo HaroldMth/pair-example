@@ -1,72 +1,223 @@
-<!DOCKTYPE HTML>
+<!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="description" content="whatsapp bot pairing code." />
-        <meta name="keywords" content="pair, whatsapp-bot" />
-        <meta name="author" content="IRON-M4N" />
-        <link
-            rel="icon"
-            href="https://cdn.ironman.my.id/u/uugBEhB.jpeg"
-            type="image/jpeg"
-        />
-        <link rel="stylesheet" href="style.css" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Phone Pairing</title>
-    </head>
-    <body>
-        <div class="card">
-            <h2 style="color: white">Enter Phone Number</h2>
-            <input
-                type="text"
-                id="phone"
-                placeholder="Enter your phone number"
-            />
-            <a onclick="submit()">Submit</a>
-            <div id="output"></div>
-        </div>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="description" content="HANS BYTE WhatsApp bot pairing page" />
+  <meta name="keywords" content="whatsapp, bot, pairing, hans byte" />
+  <meta name="author" content="Hans Tech" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-        <script>
-            function cut(input) {
-                return input.replace(/\D/g, "");
-            }
-            async function submit() {
-                var inp = document.getElementById("phone").value;
-                var trim = cut(inp);
+  <title>HANS BYTE • Pairing</title>
 
-                try {
-                    var res = await fetch(`/pair?code=${trim}`);
-                    var data = await res.json();
+  <link rel="icon" href="https://cdn.ironman.my.id/u/uugBEhB.jpeg" type="image/jpeg" />
 
-                    if (res.ok) {
-                        document.getElementById("output").innerHTML = `
-                        <p>Code: ${data.code}</p>
-                        <button class="copy-btn" onclick="copyToClipboard('${data.code}')">Copy to Clipboard</button>
-                        <p id="copy-confirm" class="copy-confirm" style="display: none;">Copied!</p>
-                    `;
-                    } else {
-                        document.getElementById(
-                            "output"
-                        ).innerHTML = `<p>Error: fekd up</p>`;
-                    }
-                } catch (error) {
-                    document.getElementById(
-                        "output"
-                    ).innerHTML = `<p>Error: ${error}</p>`;
-                }
-            }
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      font-family: "Poppins", system-ui, sans-serif;
+    }
 
-            function copyToClipboard(text) {
-                navigator.clipboard
-                    .writeText(text)
-                    .then(() => {
-                        document.getElementById("copy-confirm").style.display =
-                            "block";
-                    })
-                    .catch(err => {
-                        alert(err);
-                    });
-            }
-        </script>
-    </body>
+    body {
+      min-height: 100vh;
+      background: linear-gradient(135deg, #6a00ff, #ff2db2, #00d4ff);
+      background-size: 400% 400%;
+      animation: gradientMove 12s ease infinite;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+    }
+
+    @keyframes gradientMove {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .card {
+      width: 360px;
+      padding: 30px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      box-shadow: 0 0 40px rgba(0, 0, 0, 0.4);
+      text-align: center;
+      animation: fadeIn 0.8s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(15px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .title {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+      background: linear-gradient(90deg, #00eaff, #ff4fd8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .subtitle {
+      font-size: 0.9rem;
+      opacity: 0.85;
+      margin-bottom: 22px;
+    }
+
+    input {
+      width: 100%;
+      padding: 14px;
+      border-radius: 14px;
+      border: none;
+      outline: none;
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+      font-size: 0.95rem;
+      margin-bottom: 16px;
+    }
+
+    input::placeholder {
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    .btn {
+      width: 100%;
+      padding: 14px;
+      border-radius: 14px;
+      border: none;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.95rem;
+      background: linear-gradient(90deg, #7a00ff, #ff2db2, #00cfff);
+      color: #fff;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+      box-shadow: 0 0 18px rgba(255, 45, 178, 0.6);
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 0 26px rgba(0, 212, 255, 0.9);
+    }
+
+    #output {
+      margin-top: 18px;
+      font-size: 0.95rem;
+    }
+
+    .code-box {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.35);
+      font-weight: 600;
+      letter-spacing: 1px;
+    }
+
+    .copy-btn {
+      margin-top: 10px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      background: linear-gradient(90deg, #00eaff, #ff4fd8);
+      color: #000;
+      font-weight: 600;
+    }
+
+    .copy-confirm {
+      margin-top: 8px;
+      color: #00ffcc;
+      font-size: 0.85rem;
+      animation: pop 0.4s ease;
+    }
+
+    @keyframes pop {
+      from { transform: scale(0.8); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    .footer {
+      margin-top: 22px;
+      font-size: 0.8rem;
+      opacity: 0.8;
+    }
+
+    .footer a {
+      color: #00eaff;
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="card">
+    <div class="title">HANS BYTE PAIRING</div>
+    <div class="subtitle">Secure WhatsApp Bot Connection</div>
+
+    <input type="text" id="phone" placeholder="Enter phone number (country code)" />
+    <button class="btn" onclick="submitPair()">Generate Pair Code</button>
+
+    <div id="output"></div>
+
+    <div class="footer">
+      By <strong>Hans Tech</strong><br />
+      Follow our <a href="https://whatsapp.com/channel/0029Vb6F9V9FHWpsqWq1CF14"  target="_blank">WhatsApp Channel</a>
+    </div>
+  </div>
+
+  <script>
+    function cut(input) {
+      return input.replace(/\D/g, "");
+    }
+
+    async function submitPair() {
+      const phone = cut(document.getElementById("phone").value);
+      const output = document.getElementById("output");
+
+      if (!phone) {
+        output.innerHTML = "<p>❌ Please enter a valid phone number.</p>";
+        return;
+      }
+
+      output.innerHTML = "<p>⏳ Generating code...</p>";
+
+      try {
+        const res = await fetch(`/pair?code=${phone}`);
+        const data = await res.json();
+
+        if (!res.ok) throw new Error("Pairing failed");
+
+        output.innerHTML = `
+          <div class="code-box">${data.code}</div>
+          <button class="copy-btn" onclick="copyToClipboard('${data.code}')">
+            Copy Code
+          </button>
+          <div id="copy-confirm" class="copy-confirm" style="display:none;">
+            ✅ Copied to clipboard
+          </div>
+        `;
+      } catch (err) {
+        output.innerHTML = "<p>⚠️ Failed to generate pairing code.</p>";
+      }
+    }
+
+    function copyToClipboard(text) {
+      navigator.clipboard.writeText(text).then(() => {
+        document.getElementById("copy-confirm").style.display = "block";
+      });
+    }
+  </script>
+
+</body>
 </html>
